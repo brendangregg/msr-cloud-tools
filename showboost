@@ -1,0 +1,97 @@
+#!/bin/bash
+#
+# showboost	Show C0 cycle rate (turbo boost). MSR specific (currently Intel)
+#
+# This was written for use in a Xen guest (AWS EC2).
+#
+# USAGE: showboost [interval]
+#
+# This uses the CPU Model Specific Registers to read the turbo boost ratios and
+# CPU cycles. The way the MSR is read is processor specific. If you want to run
+# this on AMD or other CPU types, the MSR definitions section will need editing.
+#
+# COPYRIGHT: Copyright (c) 2014 Brendan Gregg.
+#
+#  This program is free software; you can redistribute it and/or
+#  modify it under the terms of the GNU General Public License
+#  as published by the Free Software Foundation; either version 2
+#  of the License, or (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#
+#  You should have received a copy of the GNU General Public License
+#  along with this program; if not, write to the Free Software Foundation,
+#  Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+#
+#  (http://www.gnu.org/copyleft/gpl.html)
+#
+# 12-Sep-2014   Brendan Gregg   Created this.
+
+### MSR definitions
+IA32_MPERF=0xe7
+IA32_APERF=0xe8
+MSR_TURBO_RATIO_LIMIT1=0x1ae
+MSR_TURBO_RATIO_LIMIT1_MASK=15:8	# assuming 10 core package
+
+### sanity check
+family=$(awk '/cpu family/ { print $NF; exit }' /proc/cpuinfo)
+if (( family != 6 )); then
+	echo >&2 "WARNING: CPU family $family not recognized (not Intel?):"
+	head >&2 /proc/cpuinfo
+	echo >&2 "WARNING: continuining, but data is probably wrong."
+	echo >&2 "WARNING: edit this script to use the correct MSRs."
+fi
+
+### options
+cpu=0
+interval=${1:-5}
+
+function usage {
+	echo >&2 "USAGE: showboost [interval]"
+	exit
+}
+
+[[ "$1" == "-h" ]] && usage
+
+if [[ "$USER" != "root" ]]; then
+	echo >&2 "ERROR: needs root access. Exiting."
+	exit 1
+fi
+
+if ! /sbin/modprobe msr; then
+	echo >&2 "ERROR: modprobe msr. Missing msr-tools package? Exiting."
+	exit 1
+fi
+
+base_mhz=$(awk '/cpu MHz/ { print $NF; exit }' /proc/cpuinfo)
+base_mhz=${base_mhz%.*}
+turbo=$(rdmsr $MSR_TURBO_RATIO_LIMIT1 -f $MSR_TURBO_RATIO_LIMIT1_MASK -d)
+echo "CPU MHz     :" $base_mhz
+echo "Turbo MHz   :" $(( turbo * 100 )) "(10 active)"
+echo "Turbo Ratio :" $(( turbo * 100 * 100 / base_mhz ))"% (10 active)"
+echo "CPU $cpu summary every $interval seconds..."
+echo
+
+printf "%-10s %-12s %-12s %6s %6s %6s\n" "TIME" "C0_MCYC" "C0_ACYC" "UTIL" \
+    "RATIO" "MHz"
+
+while :; do
+	t=$(printf "%(%H:%M:%S)T" -1)
+	m=$(rdmsr -p$cpu $IA32_MPERF -d)
+	a=$(rdmsr -p$cpu $IA32_APERF -d)
+	(( dm = m - lm ))
+	(( da = a - la ))
+	(( ratio = 100 * da / dm ))
+	(( max_mhz = base_mhz * da / dm ))
+	(( util = dm * 100 / (base_mhz * 1000000 * interval) ))
+	if (( lm > 0 )); then
+		printf "%-10s %-12d %-12d %5d%% %5d%% %6d\n" $t $dm $da $util \
+		    $ratio $max_mhz
+	fi
+	lm=$m
+	la=$a
+	sleep $interval
+done

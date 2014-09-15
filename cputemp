@@ -1,0 +1,149 @@
+#!/bin/bash
+#
+# cputemp	Show CPU temperatures. MSR specific (currently Intel).
+#
+# This was written for use in a Xen guest (AWS EC2).
+#
+# USAGE: cputemp [-h] [-l [-u]] [interval [count]]
+#
+# This uses the CPU Model Specific Register to read per-cpu temperature
+# information. The way the MSR is read is processor specific. If you want to run
+# this on AMD or other CPU types, the MSR definitions section will need editing.
+#
+# Thanks to Ryan Cox, for the basic example of doing this:
+# http://lists.us.dell.com/pipermail/linux-poweredge/2010-December/043786.html
+#
+# COPYRIGHT: Copyright (c) 2014 Brendan Gregg.
+#
+#  This program is free software; you can redistribute it and/or
+#  modify it under the terms of the GNU General Public License
+#  as published by the Free Software Foundation; either version 2
+#  of the License, or (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#
+#  You should have received a copy of the GNU General Public License
+#  along with this program; if not, write to the Free Software Foundation,
+#  Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+#
+#  (http://www.gnu.org/copyleft/gpl.html)
+#
+# 12-Sep-2014   Brendan Gregg   Created this.
+
+### MSR definitions
+MSR_TEMPERATURE_TARGET=0x1a2
+MSR_TEMPERATURE_TARGET_MASK=23:16
+IA32_THERM_STATUS=0x19c
+IA32_THERM_STATUS_MASK=22:16
+
+### sanity check
+family=$(awk '/cpu family/ { print $NF; exit }' /proc/cpuinfo)
+if (( family != 6 )); then
+	echo >&2 "WARNING: CPU family $family not recognized (not Intel?):"
+	head >&2 /proc/cpuinfo
+	echo >&2 "WARNING: continuining, but data is probably wrong."
+	echo >&2 "WARNING: edit this script to use the correct MSRs."
+fi
+
+### options
+opt_oneline=0
+opt_util=0
+ncpus=$(nproc)
+interval=1
+count=1
+
+function usage {
+	cat <<-END >&2
+	USAGE: cputemp [-h] [-l [-u]] [interval [count]]
+	                 -h             # USAGE message
+	                 -l             # one-line output style
+	                 -u             # include average CPU utilization
+END
+	exit
+}
+
+while getopts hlu opt
+do
+	case $opt in
+	l)	opt_oneline=1 ;;
+	u)	opt_util=1 ;;
+	h|?)	usage ;;
+	esac
+done
+
+if (( opt_util && !opt_oneline )); then
+	echo >&2 "ERROR: -u currently needs -l as well."
+	exit 1
+fi
+
+shift $(( $OPTIND - 1 ))
+if (( $# )); then
+	interval=$1
+	shift
+	(( count = 7 * 24 * 3600 ))
+	(( $# )) && count=$1
+fi
+
+if [[ "$USER" != "root" ]]; then
+	echo >&2 "ERROR: needs root access. Exiting."
+	exit 1
+fi
+
+if ! /sbin/modprobe msr; then
+	echo >&2 "ERROR: modprobe msr. Missing msr-tools package? Exiting."
+	exit 1
+fi
+
+### one-line headings
+if (( opt_oneline == 1 )); then
+	(( opt_util )) && printf "AvgUtil "
+	i=0
+	while (( i++ < ncpus )); do
+		printf "CPU$i"
+		(( i != ncpus )) && printf " "
+	done
+	echo
+fi
+
+### main
+n=0
+while (( n++ < count )); do
+	if (( opt_util )); then
+		set -- $(awk '$1 == "cpu" { print $0; exit }' /proc/stat)
+		(( used0 = $2 + $3 + $4 + $6 + $7 ))
+		sleep $interval
+		set -- $(awk '$1 == "cpu" { print $0; exit }' /proc/stat)
+		(( used1 = $2 + $3 + $4 + $6 + $7 ))
+		(( used = (used1 - used0) / ncpus ))
+		if (( opt_oneline )); then
+			printf "$used "
+		else
+			printf "%7s " $used
+		fi
+	else
+		(( n != count )) && sleep $interval
+	fi
+	if (( ! opt_oneline )); then
+		printf "%3s %8s\n" "CPU" "TEMP(C)"
+	fi
+
+	# fetch and print CPU temperatures
+	cd /dev/cpu
+	num=0
+	for cpu in [0-9]*
+	do
+		temp=$(($(rdmsr -p$cpu -f $MSR_TEMPERATURE_TARGET_MASK \
+		    -d $MSR_TEMPERATURE_TARGET) -
+		    $(rdmsr -p$cpu -f $IA32_THERM_STATUS_MASK \
+		    -u $IA32_THERM_STATUS)))
+		if (( opt_oneline )); then
+			(( num++ )) && printf " "
+			printf $temp
+		else
+			printf "%3d %8s\n" $cpu $temp
+		fi
+	done | sort -n
+done
