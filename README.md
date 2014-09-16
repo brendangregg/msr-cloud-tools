@@ -7,5 +7,7 @@ Tested on Ubuntu Trusty.
 
 Prereqs:
 
-apt-get install msr-tools
-modprobe msr
+```
+# sudo apt-get install msr-tools
+# sudo modprobe msr
+```
