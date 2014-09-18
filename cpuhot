@@ -83,11 +83,11 @@ do
 	do=$(rdmsr -p$cpu -f $IA32_THERM_STATUS_DO \
 	    -u $IA32_THERM_STATUS)
 	fl=$(rdmsr -p$cpu -f $IA32_THERM_STATUS_FLAGS \
-	    -u $IA32_THERM_STATUS)
+	    -x $IA32_THERM_STATUS)
 	(( temp = tt - do ))
 	phot="$phot $tt"
 	temps="$temps $temp"
-	flags="$flags $fl"
+	flags="$flags 0x$fl"
 done
 
 ### print report
