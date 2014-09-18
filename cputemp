@@ -4,7 +4,9 @@
 #
 # This was written for use in a Xen guest (AWS EC2).
 #
-# USAGE: cputemp [-h] [-l [-u]] [interval [count]]
+# USAGE: cputemp [-hu] [interval [count]]
+#
+# Temperatures are printed in degrees Celsius, per-CPU.
 #
 # This uses the CPU Model Specific Register to read per-cpu temperature
 # information. The way the MSR is read is processor specific. If you want to run
@@ -49,7 +51,6 @@ if (( family != 6 )); then
 fi
 
 ### options
-opt_oneline=0
 opt_util=0
 ncpus=$(nproc)
 interval=1
@@ -57,15 +58,14 @@ count=1
 
 function usage {
 	cat <<-END >&2
-	USAGE: cputemp [-h] [-l [-u]] [interval [count]]
-	                 -h             # USAGE message
-	                 -l             # one-line output style
-	                 -u             # include average CPU utilization
+	USAGE: cputemp [-hu] [interval [count]]
+	               -h         # USAGE message
+	               -u         # include average CPU utilization
 END
 	exit
 }
 
-while getopts hlu opt
+while getopts hu opt
 do
 	case $opt in
 	l)	opt_oneline=1 ;;
@@ -73,11 +73,6 @@ do
 	h|?)	usage ;;
 	esac
 done
-
-if (( opt_util && !opt_oneline )); then
-	echo >&2 "ERROR: -u currently needs -l as well."
-	exit 1
-fi
 
 shift $(( $OPTIND - 1 ))
 if (( $# )); then
@@ -87,6 +82,7 @@ if (( $# )); then
 	(( $# )) && count=$1
 fi
 
+### check access
 if [[ "$USER" != "root" ]]; then
 	echo >&2 "ERROR: needs root access. Exiting."
 	exit 1
@@ -97,20 +93,24 @@ if ! /sbin/modprobe msr; then
 	exit 1
 fi
 
-### one-line headings
-if (( opt_oneline == 1 )); then
-	(( opt_util )) && printf "AvgUtil "
-	i=0
-	while (( i++ < ncpus )); do
-		printf "CPU$i"
-		(( i != ncpus )) && printf " "
-	done
-	echo
-fi
+cd /dev/cpu
+
+### heading
+head=
+(( opt_util )) && head="AvgUtil "
+i=0
+while (( i++ < ncpus )); do
+	head="${head}CPU$i"
+	(( i != ncpus )) && head="$head "
+done
+echo $head
 
 ### main
 n=0
 while (( n++ < count )); do
+	out=
+
+	# measure and print CPU utilization
 	if (( opt_util )); then
 		set -- $(awk '$1 == "cpu" { print $0; exit }' /proc/stat)
 		(( used0 = $2 + $3 + $4 + $6 + $7 ))
@@ -118,32 +118,21 @@ while (( n++ < count )); do
 		set -- $(awk '$1 == "cpu" { print $0; exit }' /proc/stat)
 		(( used1 = $2 + $3 + $4 + $6 + $7 ))
 		(( used = (used1 - used0) / ncpus ))
-		if (( opt_oneline )); then
-			printf "$used "
-		else
-			printf "%7s " $used
-		fi
+		out="$used "
 	else
 		(( n != count )) && sleep $interval
 	fi
-	if (( ! opt_oneline )); then
-		printf "%3s %8s\n" "CPU" "TEMP(C)"
-	fi
 
 	# fetch and print CPU temperatures
-	cd /dev/cpu
-	num=0
-	for cpu in [0-9]*
-	do
-		temp=$(($(rdmsr -p$cpu -f $MSR_TEMPERATURE_TARGET_MASK \
-		    -d $MSR_TEMPERATURE_TARGET) -
-		    $(rdmsr -p$cpu -f $IA32_THERM_STATUS_MASK \
-		    -u $IA32_THERM_STATUS)))
-		if (( opt_oneline )); then
-			(( num++ )) && printf " "
-			printf $temp
-		else
-			printf "%3d %8s\n" $cpu $temp
-		fi
-	done | sort -n
+	cpu=0
+	while (( cpu < ncpus )); do
+		tt=$(rdmsr -p$cpu -f $MSR_TEMPERATURE_TARGET_MASK \
+		    -d $MSR_TEMPERATURE_TARGET)
+		do=$(rdmsr -p$cpu -f $IA32_THERM_STATUS_MASK \
+		    -u $IA32_THERM_STATUS)
+		(( temp = tt - do ))
+		out="${out}$temp "
+		(( cpu++ ))
+	done
+	echo $out
 done
