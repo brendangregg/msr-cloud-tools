@@ -14,6 +14,6 @@ Tested on Ubuntu Trusty.
 
 ## Contents
 
-- [showturbo](showturbo): show the real CPU clock rate to understand the current level of turbo boost
-- [cputemp](cputemp): show per-CPU temperatures
-- [cpuhot](cpuhot): show per-CPU temperature throttle flags (from IA32_THERM_STATUS 15:0), for evidence of thermal throttling
+- [showturbo](showturbo): show the real CPU clock rate to understand the current level of turbo boost.
+- [cputemp](cputemp): show per-CPU temperatures.
+- [cpuhot](cpuhot): show per-CPU temperature throttle flags (from IA32_THERM_STATUS 15:0), for evidence of thermal throttling.
