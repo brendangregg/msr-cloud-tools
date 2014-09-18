@@ -1,0 +1,97 @@
+#!/bin/bash
+#
+# cpuhot - check for CPU temp throttles.
+#          Uses MSRs, processor specific (currently Intel).
+#
+# This was written for use in a Xen guest (AWS EC2).
+#
+# USAGE: cpuhot
+#
+# This uses the CPU Model Specific Register to read per-cpu temperature
+# information. The way the MSR is read is processor specific. If you want to run
+# this on AMD or other CPU types, the MSR definitions section will need editing.
+#
+# PROCHOT is the activation temperature for thermal throttling.
+#
+# Flags is bits 15:0 from IA32_THERM_STATUS. Any non-zero means a thermal limit
+# was reached.
+# 
+# COPYRIGHT: Copyright (c) 2014 Brendan Gregg.
+#
+#  This program is free software; you can redistribute it and/or
+#  modify it under the terms of the GNU General Public License
+#  as published by the Free Software Foundation; either version 2
+#  of the License, or (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#
+#  You should have received a copy of the GNU General Public License
+#  along with this program; if not, write to the Free Software Foundation,
+#  Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+#
+#  (http://www.gnu.org/copyleft/gpl.html)
+#
+# 17-Sep-2014   Brendan Gregg   Created this.
+
+### MSR definitions
+MSR_TEMPERATURE_TARGET=0x1a2
+MSR_TEMPERATURE_TARGET_MASK=23:16
+IA32_THERM_STATUS=0x19c
+IA32_THERM_STATUS_FLAGS=15:0
+IA32_THERM_STATUS_DO=22:16
+
+### sanity check
+family=$(awk '/cpu family/ { print $NF; exit }' /proc/cpuinfo)
+if (( family != 6 )); then
+	echo >&2 "WARNING: CPU family $family not recognized (not Intel?):"
+	head >&2 /proc/cpuinfo
+	echo >&2 "WARNING: continuining, but data is probably wrong."
+	echo >&2 "WARNING: edit this script to use the correct MSRs."
+fi
+
+### options
+ncpus=$(nproc)
+
+if [[ "$USER" != "root" ]]; then
+	echo >&2 "ERROR: needs root access. Exiting."
+	exit 1
+fi
+
+if ! /sbin/modprobe msr; then
+	echo >&2 "ERROR: modprobe msr. Missing msr-tools package? Exiting."
+	exit 1
+fi
+
+### create and store heading
+head="-"
+while (( i++ < ncpus )); do
+	head="$head CPU$i"
+done
+
+### fetch and store CPU temperatures
+temps="Celsius"
+phot="PROCHOT"
+flags="Flags"
+cd /dev/cpu
+for cpu in [0-9]*
+do
+	tt=$(rdmsr -p$cpu -f $MSR_TEMPERATURE_TARGET_MASK \
+	    -d $MSR_TEMPERATURE_TARGET)
+	do=$(rdmsr -p$cpu -f $IA32_THERM_STATUS_DO \
+	    -u $IA32_THERM_STATUS)
+	fl=$(rdmsr -p$cpu -f $IA32_THERM_STATUS_FLAGS \
+	    -u $IA32_THERM_STATUS)
+	(( temp = tt - do ))
+	phot="$phot $tt"
+	temps="$temps $temp"
+	flags="$flags $fl"
+done
+
+### print report
+echo $head
+echo $phot
+echo $temps
+echo $flags
