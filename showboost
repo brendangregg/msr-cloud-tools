@@ -46,15 +46,23 @@ if (( family != 6 )); then
 fi
 
 ### options
-cpu=0
-interval=${1:-5}
-
 function usage {
-	echo >&2 "USAGE: showboost [interval]"
+	echo >&2 "USAGE: showboost [-C CPU] [interval [count]]"
 	exit
 }
 
-[[ "$1" == "-h" ]] && usage
+opt_cpu=0; cpu=0
+
+while getopts C:h opt
+do
+	case $opt in
+	C)	opt_cpu=1; cpu=$OPTARG ;;
+	h|?)	usage ;;
+	esac
+done
+shift $(( $OPTIND - 1 ))
+interval=${1:-1}
+count=${2:-999999999}		# default semi-infinite seconds
 
 if [[ "$USER" != "root" ]]; then
 	echo >&2 "ERROR: needs root access. Exiting."
@@ -66,6 +74,7 @@ if ! /sbin/modprobe msr; then
 	exit 1
 fi
 
+### main
 base_mhz=$(awk '/cpu MHz/ { print $NF; exit }' /proc/cpuinfo)
 base_mhz=${base_mhz%.*}
 turbo=$(rdmsr $MSR_TURBO_RATIO_LIMIT1 -f $MSR_TURBO_RATIO_LIMIT1_MASK -d)
@@ -78,6 +87,7 @@ echo
 printf "%-10s %-12s %-12s %6s %6s %6s\n" "TIME" "C0_MCYC" "C0_ACYC" "UTIL" \
     "RATIO" "MHz"
 
+lines=0
 while :; do
 	t=$(printf "%(%H:%M:%S)T" -1)
 	m=$(rdmsr -p$cpu $IA32_MPERF -d)
@@ -93,5 +103,7 @@ while :; do
 	fi
 	lm=$m
 	la=$a
+	(( lines++ ))
+	(( lines > count )) && break
 	sleep $interval
 done
