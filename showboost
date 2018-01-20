@@ -4,7 +4,7 @@
 #
 # This was written for use in a Xen guest (AWS EC2).
 #
-# USAGE: showboost [interval]
+# USAGE: showboost [-C CPU] [interval [count]]
 #
 # This uses the CPU Model Specific Registers to read the turbo boost ratios and
 # CPU cycles. The way the MSR is read is processor specific. If you want to run
