@@ -15,6 +15,8 @@
 # Thanks to Ryan Cox, for the basic example of doing this:
 # http://lists.us.dell.com/pipermail/linux-poweredge/2010-December/043786.html
 #
+# REQUIREMENTS: awk, rdmsr (from msr-tools)
+#
 # COPYRIGHT: Copyright (c) 2014 Brendan Gregg.
 #
 #  This program is free software; you can redistribute it and/or
@@ -34,6 +36,7 @@
 #  (http://www.gnu.org/copyleft/gpl.html)
 #
 # 12-Sep-2014   Brendan Gregg   Created this.
+# 13-Feb-2018	   "      "	Added -a for average temp.
 
 ### MSR definitions
 MSR_TEMPERATURE_TARGET=0x1a2
@@ -51,6 +54,7 @@ if (( family != 6 )); then
 fi
 
 ### options
+opt_avg=0
 opt_util=0
 ncpus=$(nproc)
 interval=1
@@ -58,17 +62,19 @@ count=1
 
 function usage {
 	cat <<-END >&2
-	USAGE: cputemp [-hu] [interval [count]]
+	USAGE: cputemp [-ahu] [interval [count]]
 	               -h         # USAGE message
-	               -u         # include average CPU utilization
+	               -a         # average temperature only
+	               -u         # include average CPU utilization %
+	Temperatures are shown in degrees Celsius
 END
 	exit
 }
 
-while getopts hu opt
+while getopts ahu opt
 do
 	case $opt in
-	l)	opt_oneline=1 ;;
+	a)	opt_avg=1 ;;
 	u)	opt_util=1 ;;
 	h|?)	usage ;;
 	esac
@@ -97,12 +103,16 @@ cd /dev/cpu
 
 ### heading
 head=
-(( opt_util )) && head="AvgUtil "
+(( opt_util )) && head="AvgUtil(%) "
 i=0
-while (( i++ < ncpus )); do
-	head="${head}CPU$i"
-	(( i != ncpus )) && head="$head "
-done
+if (( opt_avg )); then
+	head="${head}AvgTemp(C)"
+else
+	while (( i++ < ncpus )); do
+		head="${head}CPU$i"
+		(( i != ncpus )) && head="$head "
+	done
+fi
 echo $head
 
 ### main
@@ -118,21 +128,28 @@ while (( n++ < count )); do
 		set -- $(awk '$1 == "cpu" { print $0; exit }' /proc/stat)
 		(( used1 = $2 + $3 + $4 + $6 + $7 ))
 		(( used = (used1 - used0) / ncpus ))
-		out="$used "
 	else
 		(( n != count )) && sleep $interval
 	fi
 
 	# fetch and print CPU temperatures
 	cpu=0
+	sum=0
+	out=""
 	while (( cpu < ncpus )); do
 		tt=$(rdmsr -p$cpu -f $MSR_TEMPERATURE_TARGET_MASK \
 		    -d $MSR_TEMPERATURE_TARGET)
 		do=$(rdmsr -p$cpu -f $IA32_THERM_STATUS_MASK \
 		    -u $IA32_THERM_STATUS)
 		(( temp = tt - do ))
+		(( sum += temp ))
 		out="${out}$temp "
 		(( cpu++ ))
 	done
-	echo $out
+	(( opt_util )) && printf "$used "
+	if (( opt_avg )); then
+		awk -v sum=$sum -v ncpus=$ncpus 'BEGIN { printf("%.1f\n", sum / ncpus); }'
+	else
+		echo $out
+	fi
 done
