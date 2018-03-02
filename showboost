@@ -10,6 +10,19 @@
 # CPU cycles. The way the MSR is read is processor specific. If you want to run
 # this on AMD or other CPU types, the MSR definitions section will need editing.
 #
+# FIELDS:
+#
+# - Base CPU MHz: The processor's base frequency. Not boosted in any way.
+# - Set CPU MHz: The current CPU frequency requested by the kernel's CPU
+# 		 frequency scaler.
+# - Turbo MHz(s): The range of possible turbo boost steps.
+# - Turbo Ratios: Turbo boost steps, as a percent ratio over base.
+#
+# Note that the kernel can set a CPU frequency in the turbo boost range, unless
+# /sys/devices/system/cpu/intel_pstate/no_turbo is set to 1.
+#
+# SEE ALSO: turbostat
+#
 # COPYRIGHT: Copyright (c) 2014 Brendan Gregg.
 #
 #  This program is free software; you can redistribute it and/or
@@ -29,6 +42,7 @@
 #  (http://www.gnu.org/copyleft/gpl.html)
 #
 # 12-Sep-2014   Brendan Gregg   Created this.
+# 02-Mar-2018      "      "     Changed base MHz source to fix an MHz bug.
 
 ### MSR definitions
 IA32_MPERF=0xe7
@@ -162,8 +176,20 @@ fi
 #
 
 ### main
-base_mhz=$(awk '/cpu MHz/ { print $NF; exit }' /proc/cpuinfo)
-base_mhz=${base_mhz%.*}
+
+# Fetch the base CPU MHz from the model string. Yes, this is a hack. The proper
+# way to do this is via MSR_PLATFORM_INFO or CPUID 0x15. Both are architecture
+# dependent. When I need to, I'll switch to them.
+base_mhz=$(awk '
+	/^model name.*GHz$/ { sub(/GHz/, "", $NF); printf("%d", $NF * 1000); exit; }
+	/^model name.*MHz/ { sub(/MHz/, "", $NF); printf("%d", $NF); exit; }' /proc/cpuinfo)
+if (( base_mhz == 0 )); then
+	echo "ERROR: Can't find base MHz from /proc/cpuinfo model name. Exiting."
+	# if this happens, switch to MSR_PLATFORM_INFO or CPUID
+	exit 1
+fi
+set_mhz=$(awk '/^cpu MHz/ { print $NF; exit }' /proc/cpuinfo)
+set_mhz=${set_mhz%.*}
 turbos=""
 ratios=""
 last=0
@@ -189,8 +215,9 @@ for msr in $MSR_TURBO_RATIO_LIMIT1 $MSR_TURBO_RATIO_LIMIT; do
 	ratios="$ratios $tmpratios"
 done
 
-echo "CPU MHz      :" $base_mhz
-echo "Turbo MHz    :" $turbos
+echo "Base CPU MHz :" $base_mhz
+echo "Set CPU MHz  :" $set_mhz
+echo "Turbo MHz(s) :" $turbos
 echo "Turbo Ratios :" $ratios
 echo "CPU $cpu summary every $interval seconds..."
 echo
