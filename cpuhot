@@ -53,7 +53,7 @@ if (( family != 6 )); then
 fi
 
 ### options
-ncpus=$(nproc)
+ncpus=$(nproc --all)
 
 if [[ "$USER" != "root" ]]; then
 	echo >&2 "ERROR: needs root access. Exiting."
