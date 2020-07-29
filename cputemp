@@ -56,7 +56,7 @@ fi
 ### options
 opt_avg=0
 opt_util=0
-ncpus=$(nproc)
+ncpus=$(nproc --all)
 interval=1
 count=1
 
